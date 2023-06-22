@@ -1,0 +1,187 @@
+I will now lay out the names of the core classes, functions, and methods that will be necessary, as well as a quick comment on their purpose.
+
+Core classes and functions:
+1. `main.py` - Entry point of the application
+   - `main()` - Main function to start the application
+2. `unix_socket_server.py` - Unix socket server implementation
+   - `UnixSocketServer` - Class for Unix socket server
+   - `start()` - Method to start the Unix socket server
+   - `stop()` - Method to stop the Unix socket server
+3. `command_parser.py` - Command parser implementation
+   - `parse_command()` - Function to parse the command received from the Unix socket
+4. `ftps_handler.py` - FTPS handler implementation
+   - `FTPSHandler` - Class for FTPS handler
+   - `put()` - Method to distribute files via FTPS
+   - `pull()` - Method to retrieve files via FTPS
+5. `sftp_handler.py` - SFTP handler implementation
+   - `SFTPHandler` - Class for SFTP handler
+   - `put()` - Method to distribute files via SFTP
+   - `pull()` - Method to retrieve files via SFTP
+
+Now, I will output the content of each file including ALL code.
+
+main.py
+```python
+import sys
+import threading
+from unix_socket_server import UnixSocketServer
+from command_parser import parse_command
+from ftps_handler import FTPSHandler
+from sftp_handler import SFTPHandler
+
+def main():
+    server = UnixSocketServer()
+    server.start()
+
+    while True:
+        command = server.receive_command()
+        if command == "exit":
+            break
+
+        parsed_command = parse_command(command)
+        if parsed_command["protocol"] == "ftps":
+            handler = FTPSHandler(parsed_command)
+        elif parsed_command["protocol"] == "sftp":
+            handler = SFTPHandler(parsed_command)
+        else:
+            print(f"Unknown protocol: {parsed_command['protocol']}")
+            continue
+
+        action_thread = threading.Thread(target=handler.execute)
+        action_thread.start()
+
+    server.stop()
+    sys.exit(0)
+
+if __name__ == "__main__":
+    main()
+```
+
+unix_socket_server.py
+```python
+import socket
+import os
+
+class UnixSocketServer:
+    def __init__(self, socket_path="/tmp/unix_socket_server.sock"):
+        self.socket_path = socket_path
+        self.server_socket = None
+
+    def start(self):
+        if os.path.exists(self.socket_path):
+            os.remove(self.socket_path)
+
+        self.server_socket = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+        self.server_socket.bind(self.socket_path)
+        self.server_socket.listen(1)
+
+    def receive_command(self):
+        connection, _ = self.server_socket.accept()
+        command = connection.recv(1024).decode("utf-8")
+        connection.close()
+        return command.strip()
+
+    def stop(self):
+        self.server_socket.close()
+        os.remove(self.socket_path)
+```
+
+command_parser.py
+```python
+import re
+
+def parse_command(command):
+    protocol, action, *args = command.split(", ")
+    parsed_command = {"protocol": protocol, "action": action}
+
+    for arg in args:
+        key, value = arg.split("=")
+        parsed_command[key] = value
+
+    return parsed_command
+```
+
+ftps_handler.py
+```python
+from ftplib import FTP_TLS
+
+class FTPSHandler:
+    def __init__(self, command):
+        self.command = command
+
+    def execute(self):
+        if self.command["action"] == "put":
+            self.put()
+        elif self.command["action"] == "pull":
+            self.pull()
+        else:
+            print(f"Unknown action: {self.command['action']}")
+
+    def put(self):
+        ftps = FTP_TLS()
+        ftps.connect(self.command["address"], int(self.command["portnumber"]))
+        ftps.login(self.command["user"], self.command["passwd"])
+        ftps.prot_p()
+
+        with open(self.command["file"], "rb") as f:
+            ftps.storbinary(f"STOR {self.command['to']}", f)
+
+        ftps.quit()
+
+    def pull(self):
+        ftps = FTP_TLS()
+        ftps.connect(self.command["address"], int(self.command["portnumber"]))
+        ftps.login(self.command["user"], self.command["passwd"])
+        ftps.prot_p()
+
+        with open(self.command["to"], "wb") as f:
+            ftps.retrbinary(f"RETR {self.command['file']}", f.write)
+
+        ftps.quit()
+```
+
+sftp_handler.py
+```python
+import paramiko
+
+class SFTPHandler:
+    def __init__(self, command):
+        self.command = command
+
+    def execute(self):
+        if self.command["action"] == "put":
+            self.put()
+        elif self.command["action"] == "pull":
+            self.pull()
+        else:
+            print(f"Unknown action: {self.command['action']}")
+
+    def put(self):
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.connect(self.command["address"], int(self.command["portnumber"]), key_filename=self.command["pkey"])
+
+        sftp = ssh.open_sftp()
+        sftp.put(self.command["file"], self.command["to"])
+        sftp.close()
+
+        ssh.close()
+
+    def pull(self):
+        ssh = paramiko.SSHClient()
+        ssh.set_missing_host_key_policy(paramiko.AutoAddPolicy())
+        ssh.connect(self.command["address"], int(self.command["portnumber"]), key_filename=self.command["pkey"])
+
+        sftp = ssh.open_sftp()
+        sftp.get(self.command["file"], self.command["to"])
+        sftp.close()
+
+        ssh.close()
+```
+
+requirements.txt
+```
+paramiko
+```
+
+Please note that you need to install the required packages using `pip install -r requirements.txt` before running the application.
